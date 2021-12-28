@@ -1,18 +1,15 @@
+#%%
 import argparse
-import collections
 import torch
 import numpy as np
-import data_loader.data_loaders as module_data
-import model.loss as module_loss
-import model.metric as module_metric
-import model.model as module_arch
-from parse_config import ConfigParser
-from trainer import Trainer
-from utils import prepare_device
-from utils.Dynamics import *
-from utils.LieGroup import *
+from dataloader import *
+from model import Model
+# from trainer import Trainer
+from loss import *
+import os
 import random
 from pathlib import Path
+import wandb
 import time
 
 # fix random seeds for reproducibility
@@ -24,80 +21,184 @@ torch.backends.cudnn.benchmark = False
 np.random.seed(SEED)
 random.seed(SEED)
 
-def main(config):
-    logger = config.get_logger('train')
+def train_epoch(model, optimizer, input, label,Loss_Fn, args):
+    q_value = model.q_layer(input)
+    q_loss = q_entropy(torch.abs(q_value))
+    q_loss = torch.mean(q_loss,dim=0)
+    total_loss = - args.q_entropy * q_loss 
 
-    # setup data_loader instances
-    data_loader = config.init_obj('data_loader', module_data)
-    valid_data_loader = data_loader.split_validation()
+    output, Twistls = model.poe_layer(q_value)
+    loss = Loss_Fn(output,label)
+    regularizer_loss = args.Twist_norm * Twist_norm(model)
+    regularizer_loss = regularizer_loss + args.Twist2point * Twist2point(Twistls,label)
+    total_loss = total_loss + loss + regularizer_loss
+    
+    optimizer.zero_grad()
+    total_loss.backward()
+    optimizer.step()
 
-    # build model architecture, then print to console
-    model = config.init_obj('arch', module_arch)
-    logger.info(model)
+    return total_loss
 
-    # prepare for (multi-device) GPU training
-    device, device_ids = prepare_device(config['n_gpu'])
-    # device = torch.device('cuda:1')
-    # torch.cuda.set_device(device)
+def test_epoch(model, input, label, Loss_Fn, args):
+    q_value = model.q_layer(input)
+    q_loss = q_entropy(torch.abs(q_value))
+    q_loss = torch.mean(q_loss,dim=0)
+    q_loss = args.q_entropy * q_loss
 
+    output,Twistls = model.poe_layer(q_value)
+    Twist2pointloss = args.Twist2point * Twist2point(Twistls,label)
+
+    loss = Loss_Fn(output,label)
+    regularizer_loss = args.Twist_norm * Twist_norm(model)
+
+    total_loss = loss + regularizer_loss
+
+    return total_loss,q_loss,Twist2pointloss
+
+def main(args):
+    #set logger
+    if args.wandb:
+        wandb.init(project = args.pname)
+
+    #set device
+    os.environ["CUDA_VISIBLE_DEVICES"]=args.device
+    device = torch.device('cuda:0')
+    torch.cuda.set_device(device)
+
+    #set model
+    model = Model(args.n_joint, args.input_dim)
     model = model.to(device)
-    if len(device_ids) > 1:
-        model = torch.nn.DataParallel(model, device_ids=device_ids)
 
-    # get function handles of loss and metrics
-    criterion = getattr(module_loss, config['loss'])
-    metrics = [getattr(module_metric, met) for met in config['metrics']]
+    #load weight when requested
+    if os.path.isfile(args.resume_dir):
+        weight = torch.load(args.resume_dir)
+        model.load_state_dict(weight['state_dict'])
+        print("loading successful!")
+    #set optimizer
+    optimizer = torch.optim.Adam(model.parameters(),lr= args.lr, weight_decay=args.wd)
 
-    # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler
-    poelyr_params = list(map(lambda x: x[1], list(filter(lambda named_params: 'poe' in named_params[0], model.named_parameters()))))
-    others_params = list(map(lambda x: x[1], list(filter(lambda named_params: 'poe' not in named_params[0], model.named_parameters()))))
-    optimizer = config.init_obj('optimizer', torch.optim, [{'params': others_params, 'lr': 1e-2}, {'params': poelyr_params, 'lr': 1e-1}])
-    # optimizer = config.init_obj('optimizer', torch.optim, [{'params': others_params, 'lr': 1e-3}, {'params': poelyr_params, 'lr': 1e-1}])
-    # optimizer = config.init_obj('optimizer', torch.optim, [{'params': others_params, 'lr': 1e-3}, {'params': poelyr_params, 'lr': 1e-2}])
-    # optimizer = config.init_obj('optimizer', torch.optim, [{'params': others_params, 'lr': 1e-4}, {'params': poelyr_params, 'lr': 1e-2}])
 
-    lr_scheduler = config.init_obj('lr_scheduler', torch.optim.lr_scheduler, optimizer)
+    #declare loss function
+    if args.loss_function == 'Pos_norm2':
+        Loss_Fn = Pos_norm2
+    else:
+        print("Invalid loss_function")
+        exit(0)
+    
 
-    trainer = Trainer(model, criterion, metrics, optimizer,
-                      config=config,
-                      device=device,
-                      data_loader=data_loader,
-                      valid_data_loader=valid_data_loader,
-                      lr_scheduler=lr_scheduler)
-    trainer.train()
-    jointTwist = trainer.model.poe.getJointTwist()
-    M_se3 = trainer.model.poe.M_se3
-    train_x_gpu = data_loader.dataset.x.to(device)
-    train_output = trainer.model(train_x_gpu).cpu()
-    train_target = data_loader.dataset.y
-    jointAngle = trainer.model.getJointAngle(train_x_gpu).cpu()
-
-    pathname = "./output/4param/txtfile/"
+    #assert path to save model
+    pathname = args.save_dir
     Path(pathname).mkdir(parents=True, exist_ok=True)
-    with torch.no_grad():
-        np.savetxt(pathname+'jointAngle.txt', jointAngle, delimiter=',')
-        np.savetxt(pathname+'jointTwist.txt', jointTwist.cpu(), delimiter=',')
-        np.savetxt(pathname+'M_se3.txt', M_se3.cpu(), delimiter=',')
-        np.savetxt(pathname+'nominalTwist.txt', trainer.model.poe.nominalTwist.cpu(), delimiter=',')
-        np.savetxt(pathname+'outputPose.txt', skew_se3(logSE3(train_output)), delimiter=',')
-        np.savetxt(pathname+'targetPose.txt', skew_se3(logSE3(train_target)), delimiter=',')
+
+    #set dataloader
+    print("Setting up dataloader")
+    train_data_loader = FoldToyDataloader(args.data_path, args.Foldstart, args.Foldend, args.n_workers, args.batch_size)
+    test_data_loader = FoldToyDataloader(args.data_path, args.Foldend, -1, args.n_workers, args.batch_size)
+    
+    print("Initalizing Training loop")
+    for epoch in range(args.epochs):
+        # Timer start
+        time_start = time.time()
+
+        # Train
+        model.train()
+        data_length = len(train_data_loader)
+        for iterate, (input,label) in enumerate(train_data_loader):
+            input = input.to(device)
+            label = label.to(device)
+            train_loss = train_epoch(model, optimizer, input, label, Loss_Fn, args)
+            print('Epoch:{}, TrainLoss:{:.2f}, Progress:{:.2f}%'.format(epoch,train_loss,100*iterate/data_length), end='\r')
+        print('Epoch:{}, TrainLoss:{:.2f}, Progress:{:.2f}%'.format(epoch,train_loss,100*iterate/data_length))
+        
+        #Evaluate
+        model.eval()
+        data_length = len(test_data_loader)
+        test_loss = np.array([])
+        for iterate, (input,label) in enumerate(test_data_loader):
+            input = input.to(device)
+            label = label.to(device)
+            total_loss,q_loss,Twist2pointloss = test_epoch(model, input, label, Loss_Fn, args)
+            total_loss = total_loss.detach().cpu().numpy()
+            test_loss = np.append(test_loss, total_loss)
+            print('Testing...{:.2f} Epoch:{}, Progress:{:.2f}%'.format(total_loss,epoch,100*iterate/data_length) , end='\r')
+        
+        test_loss = test_loss.mean()
+        print('TestLoss:{:.2f}'.format(test_loss))
+
+        # Timer end    
+        time_end = time.time()
+        avg_time = time_end-time_start
+        eta_time = (args.epochs - epoch) * avg_time
+        h = int(eta_time //3600)
+        m = int((eta_time %3600)//60)
+        s = int((eta_time %60))
+        print("Epoch: {}, TestLoss:{:.2f}, eta:{}:{}:{}".format(epoch, test_loss, h,m,s))
+        
+        # Log to wandb
+        if args.wandb:
+            wandb.log({'TrainLoss':train_loss, 'TestLoss':test_loss, 'TimePerEpoch':avg_time,
+            'q_entropy':q_loss,'Twist2point':Twist2pointloss},step = epoch)
+
+        #save model 
+        if (epoch+1) % args.save_period==0:
+            filename =  pathname + '/checkpoint_{}.pth'.format(epoch+1)
+            print("saving... {}".format(filename))
+            state = {
+                'state_dict':model.state_dict(),
+                'optimizer':optimizer.state_dict(),
+                'n_joint':args.n_joint,
+                'input_dim':args.input_dim
+            }
+            torch.save(state, filename)
+
 
 if __name__ == '__main__':
-
-    args = argparse.ArgumentParser(description='PyTorch Template')
-    args.add_argument('-c', '--config', default='config_euler.json', type=str,
-                      help='config file path (default: None)')
-    args.add_argument('-r', '--resume', default=None, type=str,
-                      help='path to latest checkpoint (default: None)')
-    args.add_argument('-d', '--device', default='1', type=str,
-                      help='indices of GPUs to enable (default: all)')
-
-    # custom cli options to modify configuration from default values given in json file.
-    CustomArgs = collections.namedtuple('CustomArgs', 'flags type target')
-    options = [
-        CustomArgs(['--lr', '--learning_rate'], type=float, target='optimizer;args;lr'),
-        CustomArgs(['--bs', '--batch_size'], type=int, target='data_loader;args;batch_size')
-    ]
-    config = ConfigParser.from_args(args, options)
-
-    main(config)
+    args = argparse.ArgumentParser(description= 'parse for POENet')
+    args.add_argument('--n_joint', default= 12, type=int,
+                    help='number of joints')
+    args.add_argument('--batch_size', default= 1024*8, type=int,
+                    help='batch_size')
+    args.add_argument('--data_path', default= './data/2dim_log_spiral',type=str,
+                    help='path to data')
+    args.add_argument('--save_dir', default= './output/temp',type=str,
+                    help='path to save model')
+    args.add_argument('--resume_dir', default= './output/',type=str,
+                    help='path to load model')
+    args.add_argument('--device', default= '1',type=str,
+                    help='device to use')
+    args.add_argument('--n_workers', default= 2, type=int,
+                    help='number of data loading workers')
+    args.add_argument('--wd', default= 0.001, type=float,
+                    help='weight_decay for model layer')
+    args.add_argument('--lr', default= 0.001, type=float,
+                    help='learning rate for model layer')
+    # args.add_argument('--optim', default= 'adam',type=str,
+    #                 help='optimizer option')
+    args.add_argument('--loss_function', default= 'Pos_norm2', type=str,
+                    help='get list of loss function')
+    args.add_argument('--Twist_norm', default= 0.01, type=float,
+                    help='Coefficient for TwistNorm')
+    args.add_argument('--q_entropy', default= 0.01, type=float,
+                    help='Coefficient for q_entropy')
+    args.add_argument('--Twist2point', default= 0.01, type=float,
+                    help='Coefficient for Twist2point')
+    args.add_argument('--Twist2Twist', default= 0.1, type=float,
+                    help='Coefficient for Twist2point')
+    args.add_argument('--wandb', action = 'store_true', help = 'Use wandb to log')
+    args.add_argument('--input_dim', default= 2, type=int,
+                    help='dimension of input')
+    args.add_argument('--epochs', default= 100, type=int,
+                    help='number of epoch to perform')
+    # args.add_argument('--early_stop', default= 50, type=int,
+    #                 help='number of n_Scence to early stop')
+    args.add_argument('--save_period', default= 1, type=int,
+                    help='number of scenes after which model is saved')
+    args.add_argument('--pname', default= 'POE2D-1116',type=str,
+                    help='Project name')
+    args.add_argument('--Foldstart', default= 0, type=int,
+                    help='Number of Fold to start')
+    args.add_argument('--Foldend', default= 8, type=int,
+                    help='Number of Fole to end')
+    args = args.parse_args()
+    main(args)
+#%%
