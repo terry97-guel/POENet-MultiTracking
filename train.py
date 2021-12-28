@@ -66,7 +66,7 @@ def main(args):
     torch.cuda.set_device(device)
 
     #set model
-    model = Model(args.n_joint, args.input_dim)
+    model = Model(args.branchLs, args.input_dim)
     model = model.to(device)
 
     #load weight when requested
@@ -146,7 +146,7 @@ def main(args):
             state = {
                 'state_dict':model.state_dict(),
                 'optimizer':optimizer.state_dict(),
-                'n_joint':args.n_joint,
+                'branchLs':args.branchLs,
                 'input_dim':args.input_dim
             }
             torch.save(state, filename)
@@ -154,8 +154,6 @@ def main(args):
 
 if __name__ == '__main__':
     args = argparse.ArgumentParser(description= 'parse for POENet')
-    args.add_argument('--n_joint', default= 12, type=int,
-                    help='number of joints')
     args.add_argument('--batch_size', default= 1024*8, type=int,
                     help='batch_size')
     args.add_argument('--data_path', default= './data/2dim_log_spiral',type=str,
@@ -199,6 +197,7 @@ if __name__ == '__main__':
                     help='Number of Fold to start')
     args.add_argument('--Foldend', default= 8, type=int,
                     help='Number of Fole to end')
+    args.add_argument("--branchLs", nargs="+")
     args = args.parse_args()
     main(args)
 #%%

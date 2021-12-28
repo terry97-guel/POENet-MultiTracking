@@ -6,36 +6,44 @@ from utils.pyart import *
 
 
 class POELayer(nn.Module):
-    def __init__(self, n_joint):
+    def __init__(self, branchLs):
         super(POELayer, self).__init__()
-        self.n_joint = n_joint
-        self.twist = nn.Parameter(torch.Tensor(n_joint,6))
-        self.init_p = nn.Parameter(torch.Tensor(1,3))
-        self.init_rpy =  nn.Parameter(torch.Tensor(1,3))
-        self.twist.data.uniform_(-1,1)
-        self.init_p.data.uniform_(-1,1)
-        self.init_rpy.data.uniform_(-1,1)
 
-        # init_SE3 = pr2t(self.init_p,self.init_rpy)
-        # self.init_SE3 = init_SE3
-        # self.register_buffer('init_SE3',init_SE3)
+        self.branchLS = branchLs
+        n_joint = len(branchLs)
+
+        self.twist = nn.Parameter(torch.Tensor(n_joint,6))
+        self.twist.data.uniform_(-1,1)
+
+        for joint in range(n_joint):
+            setattr(self,'branch'+str(joint)+'_p',nn.Parameter(torch.Tensor(1,3).uniform_(-1,1)) )
+            setattr(self,'branch'+str(joint)+'_rpy',nn.Parameter(torch.Tensor(1,3).uniform_(-1,1)) )
+        
 
     def forward(self, q_value):
-        n_joint = self.n_joint
+        branchLs = self.branchLS
+        n_joint = len(branchLs)
         batch_size = q_value.size()[0]
         device = q_value.device
         out = torch.tile(torch.eye(4),(batch_size,1,1)).to(device)
         Twistls = torch.zeros([batch_size,n_joint,6]).to(device)
+
+        outs = []
         for joint in range(n_joint):
             twist = self.twist[joint,:]
             Twistls[:,joint,:] = inv_x(t2x(out))@twist
             out = out @ srodrigues(twist, q_value[:,joint])
-        out =  out @ pr2t(self.init_p,self.init_rpy)
-        return out,Twistls
+
+            if branchLs[joint]:
+                out_temp = out @ pr2t(getattr(self,'branch'+str(joint)+'_p'), getattr(self,'branch'+str(joint)+'_rpy'))
+                outs.append(out_temp)
+
+        return outs,Twistls
 
 class q_layer(nn.Module):
-    def __init__(self,n_joint,inputdim,n_layers=7):
+    def __init__(self,branchLs,inputdim,n_layers=7):
         super(q_layer, self).__init__()
+        n_joint = len(branchLs)
         
         LayerList = []
         for _ in range(n_layers):
@@ -68,10 +76,10 @@ class q_layer(nn.Module):
         return q_value
 
 class Model(nn.Module):
-    def __init__(self, n_joint, inputdim):
+    def __init__(self, branchLs, inputdim):
         super(Model,self).__init__()
-        self.q_layer = q_layer(n_joint, inputdim)
-        self.poe_layer = POELayer(n_joint)
+        self.q_layer = q_layer(branchLs, inputdim)
+        self.poe_layer = POELayer(branchLs)
 
     def forward(self, motor_control):
         out = self.q_layer(motor_control)
