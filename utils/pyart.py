@@ -152,4 +152,12 @@ def rodrigues(w,q,verbose = False):
         + torch.tensordot(torch.sin(q).unsqueeze(0), w_skew.unsqueeze(0),dims = ([0],[0]))\
             + torch.tensordot( (1-torch.cos(q)).unsqueeze(0), (w_skew@w_skew).unsqueeze(0), dims =([0],[0]))
     return R
-#%%
+
+def bnum2ls(branchNum):
+    branchLs = []
+    for Num in branchNum:
+        for i in range(Num):
+            branchLs.append(0)
+        branchLs.append(1)
+    
+    return branchLs

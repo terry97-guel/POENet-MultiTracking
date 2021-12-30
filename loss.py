@@ -3,7 +3,8 @@ import torch
 
 
 def Pos_norm2(output, label):
-    output = output[:,0:3,3]
+    output = output[:,:,0:3,3]
+    output = output.reshape(-1,output.size()[1]*output.size()[2])
     loss = torch.nn.MSELoss()(output,label)
 
     return loss

@@ -4,13 +4,13 @@ import torch
 import numpy as np
 from dataloader import *
 from model import Model
-# from trainer import Trainer
 from loss import *
 import os
 import random
 from pathlib import Path
 import wandb
 import time
+from utils.pyart import bnum2ls
 
 # fix random seeds for reproducibility
 SEED = 1
@@ -29,8 +29,9 @@ def train_epoch(model, optimizer, input, label,Loss_Fn, args):
 
     output, Twistls = model.poe_layer(q_value)
     loss = Loss_Fn(output,label)
-    regularizer_loss = args.Twist_norm * Twist_norm(model)
-    regularizer_loss = regularizer_loss + args.Twist2point * Twist2point(Twistls,label)
+    # regularizer_loss = args.Twist_norm * Twist_norm(model)
+    # regularizer_loss = regularizer_loss + args.Twist2point * Twist2point(Twistls,label)
+    regularizer_loss = 0
     total_loss = total_loss + loss + regularizer_loss
     
     optimizer.zero_grad()
@@ -46,10 +47,13 @@ def test_epoch(model, input, label, Loss_Fn, args):
     q_loss = args.q_entropy * q_loss
 
     output,Twistls = model.poe_layer(q_value)
-    Twist2pointloss = args.Twist2point * Twist2point(Twistls,label)
-
+    # Twist2pointloss = args.Twist2point * Twist2point(Twistls,label)
+    Twist2pointloss = 0
+    
     loss = Loss_Fn(output,label)
-    regularizer_loss = args.Twist_norm * Twist_norm(model)
+    # regularizer_loss = args.Twist_norm * Twist_norm(model)
+    regularizer_loss = 0
+    
 
     total_loss = loss + regularizer_loss
 
@@ -65,8 +69,10 @@ def main(args):
     device = torch.device('cuda:0')
     torch.cuda.set_device(device)
 
+    branchLs = bnum2ls(args.branchNum)
+
     #set model
-    model = Model(args.branchLs, args.input_dim)
+    model = Model(branchLs, args.input_dim)
     model = model.to(device)
 
     #load weight when requested
@@ -146,7 +152,7 @@ def main(args):
             state = {
                 'state_dict':model.state_dict(),
                 'optimizer':optimizer.state_dict(),
-                'branchLs':args.branchLs,
+                'branchLs':branchLs,
                 'input_dim':args.input_dim
             }
             torch.save(state, filename)
@@ -156,7 +162,7 @@ if __name__ == '__main__':
     args = argparse.ArgumentParser(description= 'parse for POENet')
     args.add_argument('--batch_size', default= 1024*8, type=int,
                     help='batch_size')
-    args.add_argument('--data_path', default= './data/2dim_log_spiral',type=str,
+    args.add_argument('--data_path', default= './data/Multi_2dim_log_spiral',type=str,
                     help='path to data')
     args.add_argument('--save_dir', default= './output/temp',type=str,
                     help='path to save model')
@@ -197,7 +203,7 @@ if __name__ == '__main__':
                     help='Number of Fold to start')
     args.add_argument('--Foldend', default= 8, type=int,
                     help='Number of Fole to end')
-    args.add_argument("--branchLs", nargs="+")
+    args.add_argument("--branchNum", nargs="+", default= [3,3,3,3,3])
     args = args.parse_args()
     main(args)
 #%%

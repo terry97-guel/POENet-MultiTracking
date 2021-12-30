@@ -28,7 +28,7 @@ class POELayer(nn.Module):
         out = torch.tile(torch.eye(4),(batch_size,1,1)).to(device)
         Twistls = torch.zeros([batch_size,n_joint,6]).to(device)
 
-        outs = []
+        outs = torch.tensor([]).reshape(batch_size,-1,4,4).to(device)
         for joint in range(n_joint):
             twist = self.twist[joint,:]
             Twistls[:,joint,:] = inv_x(t2x(out))@twist
@@ -36,7 +36,7 @@ class POELayer(nn.Module):
 
             if branchLs[joint]:
                 out_temp = out @ pr2t(getattr(self,'branch'+str(joint)+'_p'), getattr(self,'branch'+str(joint)+'_rpy'))
-                outs.append(out_temp)
+                outs = torch.cat((outs,out_temp.unsqueeze(1)), dim=1)
 
         return outs,Twistls
 
