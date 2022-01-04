@@ -14,19 +14,18 @@ def main(args):
 
     # load checkpoint
     checkpoint = torch.load(args.checkpoint)
-    # n_joint = checkpoint['n_joint']
-    # input_dim = checkpoint['input_dim']
-    
-    n_joint = 12
-    input_dim = 2
+    branchNum = checkpoint['branchNum']
+    input_dim = checkpoint['input_dim']
+    branchLs = bnum2ls(branchNum)
+    n_joint = len(branchLs)
 
     # load model
-    model = Model(n_joint, input_dim)
+    model = Model(branchLs, input_dim)
     model.load_state_dict(checkpoint['state_dict'])
     model.eval()
 
     # load data
-    test_data_loader = ToyDataloader(args.data_path, 1, 1, shuffle=False)
+    test_data_loader = ToyDataloader(args.data_path, n_workers = 1, batch = 1, shuffle=False)
 
     # get jointAngle.txt
     jointAngle = np.array([]).reshape(-1,n_joint)
@@ -45,12 +44,20 @@ def main(args):
         jointTwist = np.vstack((jointTwist,twist))
     np.savetxt(args.save_dir+'/jointTwist.txt',jointTwist)
 
-    # get M_se3.txt
-    p = model.poe_layer.init_p
-    r = model.poe_layer.init_rpy
-    M_se3 = pr2t(p,r)
-    M_se3 = M_se3.squeeze(0).detach().cpu().numpy()
-    np.savetxt(args.save_dir+'/M_se3.txt',M_se3)
+    # get branchLs
+    np.savetxt(args.save_dir+'/branchLs.txt',branchLs)
+
+    # get joint offset
+    jointOffset = np.array([]).reshape(-1,6)
+    for joint in range(n_joint):
+        branchnameP = 'branch'+str(joint)+'_p'
+        branchnameRPY = 'branch'+str(joint)+'_rpy'
+        p = getattr(model.poe_layer,branchnameP).detach().cpu().numpy()[0]
+        rpy = getattr(model.poe_layer,branchnameRPY).detach().cpu().numpy()[0]
+        combined = np.concatenate((p,rpy))
+        jointOffset = np.vstack((jointOffset,combined))
+    np.savetxt(args.save_dir+'/jointOffset.txt',jointTwist)
+
 
     # get targetPose.txt
     targetPose = test_data_loader.dataset.label
@@ -58,21 +65,23 @@ def main(args):
     np.savetxt(args.save_dir+'/targetPose.txt', targetPose)
 
     # get outputPose.txt
-    outputPose = np.array([]).reshape(-1,3)
+    outputPose = np.array([]).reshape(-1,targetPose.shape[1])
     for input,_ in test_data_loader:
         outputPose_temp = model(input)
-        outputPose_temp = outputPose_temp.squeeze(0).detach().cpu().numpy()
-        outputPose_temp = outputPose_temp[:3,3]
+        outputPose_temp = outputPose_temp[:,:,0:3,3]
+        outputPose_temp = outputPose_temp.reshape(-1,outputPose_temp.size()[1]*outputPose_temp.size()[2])
+        outputPose_temp = outputPose_temp.detach().cpu().numpy()[0]
         outputPose = np.vstack((outputPose,outputPose_temp))
+        
     np.savetxt(args.save_dir+"/outputPose.txt", outputPose)
 
     print("Done...")
 if __name__ == '__main__':
     args = argparse.ArgumentParser(description= 'parse for POENet')
     args.add_argument('--data_path', \
-        default= './data/2dim_log_spiral/fold9/2dim_log_spiral_921.txt',type=str, \
+        default= './data/Multi_2dim_log_spiral/fold9/Multi_2dim_log_spiral_910.txt',type=str, \
             help='path to model checkpoint')    
-    args.add_argument('--checkpoint', default= './output/1116/checkpoint_30.pth',type=str,
+    args.add_argument('--checkpoint', default= './output/1230/checkpoint_40.pth',type=str,
                     help='path to model checkpoint')
     args.add_argument('--save_dir', default='./2Visualize')
     args = args.parse_args()

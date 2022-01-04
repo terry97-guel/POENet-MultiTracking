@@ -35,7 +35,10 @@ class POELayer(nn.Module):
             out = out @ srodrigues(twist, q_value[:,joint])
 
             if branchLs[joint]:
-                out_temp = out @ pr2t(getattr(self,'branch'+str(joint)+'_p'), getattr(self,'branch'+str(joint)+'_rpy'))
+                p = getattr(self,'branch'+str(joint)+'_p')
+                rpy = getattr(self,'branch'+str(joint)+'_rpy')
+                r = rpy2r(rpy)
+                out_temp = out @ pr2t(p, r)
                 outs = torch.cat((outs,out_temp.unsqueeze(1)), dim=1)
 
         return outs,Twistls

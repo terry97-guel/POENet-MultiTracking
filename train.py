@@ -113,8 +113,8 @@ def main(args):
             input = input.to(device)
             label = label.to(device)
             train_loss = train_epoch(model, optimizer, input, label, Loss_Fn, args)
-            print('Epoch:{}, TrainLoss:{:.2f}, Progress:{:.2f}%'.format(epoch,train_loss,100*iterate/data_length), end='\r')
-        print('Epoch:{}, TrainLoss:{:.2f}, Progress:{:.2f}%'.format(epoch,train_loss,100*iterate/data_length))
+            print('Epoch:{}, TrainLoss:{:.2f}, Progress:{:.2f}%'.format(epoch+1,train_loss,100*iterate/data_length), end='\r')
+        print('Epoch:{}, TrainLoss:{:.2f}, Progress:{:.2f}%'.format(epoch+1,train_loss,100*iterate/data_length))
         
         #Evaluate
         model.eval()
@@ -126,7 +126,7 @@ def main(args):
             total_loss,q_loss,Twist2pointloss = test_epoch(model, input, label, Loss_Fn, args)
             total_loss = total_loss.detach().cpu().numpy()
             test_loss = np.append(test_loss, total_loss)
-            print('Testing...{:.2f} Epoch:{}, Progress:{:.2f}%'.format(total_loss,epoch,100*iterate/data_length) , end='\r')
+            print('Testing...{:.2f} Epoch:{}, Progress:{:.2f}%'.format(total_loss,epoch+1,100*iterate/data_length) , end='\r')
         
         test_loss = test_loss.mean()
         print('TestLoss:{:.2f}'.format(test_loss))
@@ -138,12 +138,12 @@ def main(args):
         h = int(eta_time //3600)
         m = int((eta_time %3600)//60)
         s = int((eta_time %60))
-        print("Epoch: {}, TestLoss:{:.2f}, eta:{}:{}:{}".format(epoch, test_loss, h,m,s))
+        print("Epoch: {}, TestLoss:{:.2f}, eta:{}:{}:{}".format(epoch+1, test_loss, h,m,s))
         
         # Log to wandb
         if args.wandb:
             wandb.log({'TrainLoss':train_loss, 'TestLoss':test_loss, 'TimePerEpoch':avg_time,
-            'q_entropy':q_loss,'Twist2point':Twist2pointloss},step = epoch)
+            'q_entropy':q_loss,'Twist2point':Twist2pointloss},step = epoch+1)
 
         #save model 
         if (epoch+1) % args.save_period==0:
@@ -152,7 +152,7 @@ def main(args):
             state = {
                 'state_dict':model.state_dict(),
                 'optimizer':optimizer.state_dict(),
-                'branchLs':branchLs,
+                'branchNum':args.branchNum,
                 'input_dim':args.input_dim
             }
             torch.save(state, filename)
@@ -197,7 +197,7 @@ if __name__ == '__main__':
     #                 help='number of n_Scence to early stop')
     args.add_argument('--save_period', default= 1, type=int,
                     help='number of scenes after which model is saved')
-    args.add_argument('--pname', default= 'POE2D-1116',type=str,
+    args.add_argument('--pname', default= 'POE2D-1230',type=str,
                     help='Project name')
     args.add_argument('--Foldstart', default= 0, type=int,
                     help='Number of Fold to start')
